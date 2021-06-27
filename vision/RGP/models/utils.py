@@ -5,7 +5,7 @@ from typing import Union
 import numpy as np
 import torch
 from torch import nn
-from torch.functional import F
+
 
 def _compute_conv_grad_sample(
     # for some reason pyre doesn't understand that
@@ -47,6 +47,7 @@ def _compute_conv_grad_sample(
     grad_sample = torch.einsum("ngrg...->ngr...", grad_sample).contiguous()
     shape = [n] + list(layer.weight.shape)
     layer.weight.grad_sample = grad_sample.view(shape)
+
 
 def _compute_linear_grad_sample(
     layer: nn.Linear, A: torch.Tensor, B: torch.Tensor, batch_dim: int = 0, gpu_id=None
