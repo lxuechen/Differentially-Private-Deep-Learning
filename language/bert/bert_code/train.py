@@ -129,8 +129,8 @@ def train(args, trainer, task, epoch_itr):
     valid_freq = (num_iter_per_epoch + 1) // args.validate_interval_updates if args.validate_interval_updates > 1 else 0
     
     epoch_loss_list = []
-
-    for i, samples in enumerate(progress, start=epoch_itr.iterations_in_epoch):
+    import tqdm
+    for i, samples in tqdm.tqdm(enumerate(progress, start=epoch_itr.iterations_in_epoch)):
         #print(len(samples))
         log_output = trainer.train_step(samples)
         if log_output is None:
