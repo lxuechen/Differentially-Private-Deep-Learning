@@ -157,9 +157,10 @@ class Trainer(object):
                         params.append(m.fc2_right.weight)
                         lrk_params_flags += [False, True, True, False, True, True]
 
-            # Do not reparametrize the classification layer as it is already low-rank
+            # Do not reparameterize the classification layer as it is already low-rank
+            # lxuechen: includes weight and bias of classification head.
             for p in self.model.named_parameters():
-                if ('sentence_classification_head' in p[0]):
+                if 'sentence_classification_head' in p[0]:
                     print('adding %s to params list' % p[0])
                     params.append(p[1])
                     lrk_params_flags.append(True)
@@ -333,6 +334,8 @@ class Trainer(object):
                 m.is_training = False
 
         # TODO(lxuechen): This seems awkward... is the embedding layer updated as usual?
+        # Only the embedding layer requires grad; the embedding layer is `Embedding(32769, 768, padding_idx=1)`
+        # The embedding index is also awkward.
         print('| actual params that need grads')
         for name, param in self.model.named_parameters():
             if param.requires_grad:
@@ -370,34 +373,38 @@ class Trainer(object):
 
             try:
                 with maybe_no_sync():
-                    # TODO: lxuechen: What happens here?
+                    # TODO(lxuechen): What happens here?
                     # forward and backward
                     loss, sample_size, logging_output = self.task.train_step(
                         sample, self.model, self.criterion, self.optimizer,
                         ignore_grad
                     )
 
-                    if (self.args.sigma > 0):
+                    if self.args.sigma > 0:
                         # compute the norms of individual gradients
                         norms = torch.zeros(sample_size, dtype=torch.float, device='cuda')
                         for i, p in enumerate(self.params):
-                            if (self.lrk_params_flags[i]):
+                            if self.lrk_params_flags[i]:
+                                # `batch_grad` is created in `linear_backward_hook` of the lrk layers.
                                 flat_g = p.batch_grad.view(sample_size, -1)
                                 norms += (torch.norm(flat_g, dim=1)).float() ** 2
                         norms = torch.sqrt(norms).half()
                         scale = self.args.clip / norms
                         scale[scale > 1] = 1
+
+                        # lxuechen: Clip and sum the individual gradients;
+                        #   `TransformerSentenceEncoderLayer` and `MultiheadAttention` here.
                         for m in self.model.modules():
-                            if (hasattr(m, 'assign_full_grad')):
-                                if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+                            if hasattr(m, 'assign_full_grad'):
+                                if hasattr(m, 'in_proj_weight') and not self.args.linear_eval:
                                     m.use_batch_grad(scale)
-                                if (hasattr(m, 'fc1') and not self.args.linear_eval):
+                                if hasattr(m, 'fc1') and not self.args.linear_eval:
                                     m.use_batch_grad(scale)
 
+                        # lxuechen: Clip and sum the individual gradients of classification head.
                         classify_weight = self.params[-2]
                         classify_bias = self.params[-1]
-
-                        if (classify_weight.grad == None):
+                        if classify_weight.grad is None:
                             classify_weight.grad = process_batch_grad(classify_weight.batch_grad, scale=scale)
                             classify_bias.grad = process_batch_grad(classify_bias.batch_grad, scale=scale)
                         else:
@@ -446,24 +453,25 @@ class Trainer(object):
         batch_size = self.args.max_sentences * update_freq
 
         # After multiple updates, we now have the clipped and accmulated individual gradients.
-        if (self.args.sigma > 0):
+        if self.args.sigma > 0:
             for i, p in enumerate(self.params):
                 # Add noise to averaged individual gradients
-                if (self.lrk_params_flags[i]):
+                if self.lrk_params_flags[i]:
                     p.grad /= batch_size
                     sigma = self.args.sigma * self.args.clip
                     p.grad += torch.normal(0, sigma / batch_size, size=p.grad.shape).cuda().half()
                 # We do not use the gradient on full weights
                 else:
+                    # lxuechen: This ensures embedding layer is not updated.
                     p.grad = None
 
             # Assign reconstructed noisy gradients to parameters
             for m in self.model.modules():
-                if (hasattr(m, 'assign_full_grad')):
-                    if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+                if hasattr(m, 'assign_full_grad'):
+                    if hasattr(m, 'in_proj_weight') and not self.args.linear_eval:
                         m.restore_param()
                         m.assign_full_grad()
-                    if (hasattr(m, 'fc1') and not self.args.linear_eval):
+                    if hasattr(m, 'fc1') and not self.args.linear_eval:
                         m.restore_param()
                         m.assign_full_grad()
 
@@ -550,7 +558,7 @@ class Trainer(object):
             grad_norm = self.optimizer.clip_grad_norm(self.args.clip_norm)
             self._prev_grad_norm = grad_norm
 
-            if (not skip):
+            if not skip:
                 # take an optimization step
                 self.optimizer.step()
                 self.set_num_updates(self.get_num_updates() + 1)

@@ -3,6 +3,7 @@ import torch.nn as nn
 
 
 def process_batch_grad(batch_grad, scale):
+    # lxuechen: Multiply individual gradient by scale and average across batch.
     dim = len(batch_grad.shape)
     scale = scale.view([batch_grad.shape[0]] + [1] * (dim - 1))
     batch_grad.mul_(scale)
