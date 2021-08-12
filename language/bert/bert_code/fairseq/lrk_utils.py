@@ -81,19 +81,16 @@ def linear_backward_hook(module, grad_input, grad_output):
 
 
 class LrkLinear(nn.Module):
+    """Low rank linear layer with no bias."""
 
-    def __init__(self, indim, outdim, batch_dim=0):
+    def __init__(self, indim, outdim):
         super(LrkLinear, self).__init__()
 
-        # self.rank = rank
-        self.batch_dim = batch_dim
-
-        tensor = torch.ones(())
-        self.weight = nn.Parameter(tensor.new_empty(size=(outdim, indim), dtype=torch.half))
+        # TODO(lxuechen): These initial weights are garbage!
+        self.weight = nn.Parameter(torch.ones(()).new_empty(size=(outdim, indim), dtype=torch.half))
 
         self.register_forward_hook(linear_forward_hook)
         self.register_backward_hook(linear_backward_hook)
 
     def forward(self, x):
-        acti = torch.matmul(x, self.weight.T)
-        return acti
+        return torch.matmul(x, self.weight.T)
