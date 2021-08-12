@@ -3,17 +3,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 from fairseq import utils
+from fairseq.lrk_utils import LrkLinear, weight_decomposition, process_batch_grad
 from fairseq.modules import (
     LayerNorm,
     MultiheadAttention,
 )
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-from fairseq.lrk_utils import LrkLinear, weight_decomposition, process_batch_grad
 
 class TransformerSentenceEncoderLayer(nn.Module):
     """
@@ -56,18 +55,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # new added
         self.normalize_before = encoder_normalize_before
-        
 
         self.fc1 = nn.Linear(self.embedding_dim, ffn_embedding_dim)
         self.fc2 = nn.Linear(ffn_embedding_dim, self.embedding_dim)
-
 
         self.fc1_right = LrkLinear(self.embedding_dim, args.rank)
         self.fc1_left = LrkLinear(args.rank, ffn_embedding_dim)
 
         self.fc2_right = LrkLinear(ffn_embedding_dim, args.rank)
         self.fc2_left = LrkLinear(args.rank, self.embedding_dim)
-        
+
         self.is_training = None
 
         self.final_layer_norm = LayerNorm(self.embedding_dim, export=export)
@@ -76,6 +73,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.need_decompose = True
 
     def replace_param(self, fc1_left, fc1_right, fc1_residual, fc2_left, fc2_right, fc2_residual):
+        # lxuechen: Fill in the values for
+        #   self.fc1_left, self.fc1_right, self.fc1,
+        #   self.fc2_left, self.fc2_right, self.fc2.
         self.fc1_left.weight.data = fc1_left
         self.fc1_right.weight.data = fc1_right
         self.fc1.weight.data = fc1_residual
@@ -84,13 +84,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.fc2_right.weight.data = fc2_right
         self.fc2.weight.data = fc2_residual
 
-    def restore_param(self):
-        self.fc1.weight.data = self.fc1_cached
-        self.fc2.weight.data = self.fc2_cached
-        self.need_decompose = True
-        
     def use_batch_grad(self, scale=None):
-        if(self.fc1_left.weight.grad == None):
+        # lxuechen: Ensure gradient accumulation works.
+        if self.fc1_left.weight.grad is None:
             self.fc1_left.weight.grad = process_batch_grad(self.fc1_left.weight.batch_grad, scale=scale)
             self.fc1_right.weight.grad = process_batch_grad(self.fc1_right.weight.batch_grad, scale=scale)
             self.fc2_left.weight.grad = process_batch_grad(self.fc2_left.weight.batch_grad, scale=scale)
@@ -99,7 +95,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.fc1_left.weight.grad += process_batch_grad(self.fc1_left.weight.batch_grad, scale=scale)
             self.fc1_right.weight.grad += process_batch_grad(self.fc1_right.weight.batch_grad, scale=scale)
             self.fc2_left.weight.grad += process_batch_grad(self.fc2_left.weight.batch_grad, scale=scale)
-            self.fc2_right.weight.grad += process_batch_grad(self.fc2_right.weight.batch_grad, scale=scale)     
+            self.fc2_right.weight.grad += process_batch_grad(self.fc2_right.weight.batch_grad, scale=scale)
+
+    def restore_param(self):
+        self.fc1.weight.data = self.fc1_cached
+        self.fc2.weight.data = self.fc2_cached
+        self.need_decompose = True
 
     def _assign_full_grad(self, left, right, host):
         left_w, left_g = left.data, left.grad
@@ -111,12 +112,10 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         host.grad = m1 + m2
 
-
     def assign_full_grad(self):
-
         self._assign_full_grad(self.fc1_left.weight, self.fc1_right.weight, self.fc1.weight)
         self._assign_full_grad(self.fc2_left.weight, self.fc2_right.weight, self.fc2.weight)
-        
+
         self.fc1_left.weight.grad = None
         self.fc1_right.weight.grad = None
         self.fc2_left.weight.grad = None
@@ -146,12 +145,22 @@ class TransformerSentenceEncoderLayer(nn.Module):
             rel_pos_bias=rel_pos_bias,
         )
 
-        if(self.is_training and self.need_decompose):
+        if self.is_training and self.need_decompose:
+            # Store the values in self.fc1.weight, self.fc2.weight.
             self.fc1_cached, self.fc2_cached = self.fc1.weight.data, self.fc2.weight.data
-            fc1_left_data, fc1_right_data, fc1_residual = weight_decomposition(self.fc1.weight.data, rank=self.args.rank)
-            fc2_left_data, fc2_right_data, fc2_residual = weight_decomposition(self.fc2.weight.data, rank=self.args.rank)
+
+            # Run orthogonalization procedure.
+            # (out_dim, rank), (in_dim, rank), (out_dim, in_dim).
+            fc1_left_data, fc1_right_data, fc1_residual = weight_decomposition(
+                self.fc1.weight.data, rank=self.args.rank
+            )
+            fc2_left_data, fc2_right_data, fc2_residual = weight_decomposition(
+                self.fc2.weight.data, rank=self.args.rank
+            )
             self.need_decompose = False
-            self.replace_param(fc1_left_data, fc1_right_data, fc1_residual, fc2_left_data, fc2_right_data, fc2_residual)
+            self.replace_param(
+                fc1_left_data, fc1_right_data, fc1_residual, fc2_left_data, fc2_right_data, fc2_residual
+            )
 
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
@@ -160,7 +169,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         residual = x
         x = self.maybe_layer_norm(self.final_layer_norm, x, before=True)
 
-        if(self.is_training):
+        if self.is_training:
             lrk_x = self.fc1_right(x)
             lrk_x = self.fc1_left(lrk_x)
             residual_x = self.fc1(x)
@@ -171,7 +180,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         x = self.activation_fn(x)
         x = F.dropout(x, p=self.activation_dropout, training=self.training)
 
-        if(self.is_training):
+        if self.is_training:
             lrk_x = self.fc2_right(x)
             lrk_x = self.fc2_left(lrk_x)
             residual_x = self.fc2(x)
@@ -179,13 +188,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
         else:
             x = self.fc2(x)
 
-
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(self.final_layer_norm, x, after=True)
-        
+
         return x
-    
+
     def maybe_layer_norm(self, layer_norm, x, before=False, after=False):
         assert before ^ after
         if after ^ self.normalize_before:

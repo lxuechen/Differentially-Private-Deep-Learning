@@ -3,40 +3,33 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from fairseq.lrk_utils import LrkLinear, weight_decomposition, process_batch_grad
 import torch
 from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
-
-from fairseq import utils
-from fairseq.lrk_utils import LrkLinear, weight_decomposition, process_batch_grad
+import warnings
 
 
-    #def normal_forward(self, x):
-    #    return self.full_linear(x)
-
-
-
-
-def multi_head_attention_forward(query,                           # type: Tensor
-                                 key,                             # type: Tensor
-                                 value,                           # type: Tensor
-                                 attn_embed_dim,              # type: int
-                                 num_heads,                       # type: int
-                                 in_proj_weight,                  # type: Tensor
-                                 in_proj_bias,                    # type: Tensor
-                                 bias_k,                          # type: Optional[Tensor]
-                                 bias_v,                          # type: Optional[Tensor]
-                                 ma_module,                       # multihead_attention module
-                                 add_zero_attn,                   # type: bool
-                                 dropout_p,                       # type: float
-                                 out_proj_weight,                 # type: Tensor
-                                 out_proj_bias,                   # type: Tensor
-                                 training=True,                   # type: bool
-                                 key_padding_mask=None,           # type: Optional[Tensor]
-                                 need_weights=True,               # type: bool
-                                 attn_mask=None,                  # type: Optional[Tensor]
-                                 rel_pos_bias=None                # type: Optional[Tensor]
+def multi_head_attention_forward(query,  # type: Tensor
+                                 key,  # type: Tensor
+                                 value,  # type: Tensor
+                                 attn_embed_dim,  # type: int
+                                 num_heads,  # type: int
+                                 in_proj_weight,  # type: Tensor
+                                 in_proj_bias,  # type: Tensor
+                                 bias_k,  # type: Optional[Tensor]
+                                 bias_v,  # type: Optional[Tensor]
+                                 ma_module,  # multihead_attention module
+                                 add_zero_attn,  # type: bool
+                                 dropout_p,  # type: float
+                                 out_proj_weight,  # type: Tensor
+                                 out_proj_bias,  # type: Tensor
+                                 training=True,  # type: bool
+                                 key_padding_mask=None,  # type: Optional[Tensor]
+                                 need_weights=True,  # type: bool
+                                 attn_mask=None,  # type: Optional[Tensor]
+                                 rel_pos_bias=None  # type: Optional[Tensor]
                                  ):
     # type: (...) -> Tuple[Tensor, Optional[Tensor]]
     tgt_len, bsz, embed_dim = query.size()
@@ -48,21 +41,23 @@ def multi_head_attention_forward(query,                           # type: Tensor
 
     args = ma_module.args
 
+    if (ma_module.is_training):
+        lrk_in_left, lrk_in_right, lrk_out_left, lrk_out_right = ma_module.in_proj_left, ma_module.in_proj_right, \
+                                                                 ma_module.out_proj_left, ma_module.out_proj_right
 
-    if(ma_module.is_training):
-        lrk_in_left, lrk_in_right, lrk_out_left, lrk_out_right = ma_module.in_proj_left, ma_module.in_proj_right, ma_module.out_proj_left, ma_module.out_proj_right
-
-        if(ma_module.need_decompose):
+        if (ma_module.need_decompose):
             ma_module.in_cached, ma_module.out_cached = in_proj_weight.data, out_proj_weight.data
             in_left_data, in_right_data, in_residual_data = weight_decomposition(in_proj_weight.data, rank=args.rank)
-            out_left_data, out_right_data, out_residual_data = weight_decomposition(out_proj_weight.data, rank=args.rank)
-            ma_module.replace_param(in_left_data, in_right_data, in_residual_data, out_left_data, out_right_data, out_residual_data)
+            out_left_data, out_right_data, out_residual_data = weight_decomposition(out_proj_weight.data,
+                                                                                    rank=args.rank)
+            ma_module.replace_param(in_left_data, in_right_data, in_residual_data, out_left_data, out_right_data,
+                                    out_residual_data)
             ma_module.need_decompose = False
 
         residual_acti0 = F.linear(query, in_proj_weight, in_proj_bias)
         lrk_acti0 = lrk_in_right(query)
         lrk_acti0 = lrk_in_left(lrk_acti0)
-        acti = residual_acti0+lrk_acti0
+        acti = residual_acti0 + lrk_acti0
     else:
         acti = F.linear(query, in_proj_weight, in_proj_bias)
 
@@ -72,7 +67,7 @@ def multi_head_attention_forward(query,                           # type: Tensor
 
     if attn_mask is not None:
         assert attn_mask.dtype == torch.float32 or attn_mask.dtype == torch.float64 or \
-            attn_mask.dtype == torch.float16 or attn_mask.dtype == torch.uint8 or attn_mask.dtype == torch.bool, \
+               attn_mask.dtype == torch.float16 or attn_mask.dtype == torch.uint8 or attn_mask.dtype == torch.bool, \
             'Only float, byte, and bool types are supported for attn_mask, not {}'.format(attn_mask.dtype)
         if attn_mask.dtype == torch.uint8:
             warnings.warn("Byte tensor for attn_mask in nn.MultiheadAttention is deprecated. Use bool tensor instead.")
@@ -91,7 +86,8 @@ def multi_head_attention_forward(query,                           # type: Tensor
 
     # convert ByteTensor key_padding_mask to bool
     if key_padding_mask is not None and key_padding_mask.dtype == torch.uint8:
-        warnings.warn("Byte tensor for key_padding_mask in nn.MultiheadAttention is deprecated. Use bool tensor instead.")
+        warnings.warn(
+            "Byte tensor for key_padding_mask in nn.MultiheadAttention is deprecated. Use bool tensor instead.")
         key_padding_mask = key_padding_mask.to(torch.bool)
 
     if bias_k is not None and bias_v is not None:
@@ -155,12 +151,12 @@ def multi_head_attention_forward(query,                           # type: Tensor
     assert list(attn_output.size()) == [bsz * num_heads, tgt_len, head_dim]
     attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, attn_embed_dim)
 
-    if(ma_module.is_training):
+    if (ma_module.is_training):
         residual_acti1 = F.linear(attn_output, out_proj_weight, out_proj_bias)
         lrk_acti1 = lrk_out_right(attn_output)
         lrk_acti1 = lrk_out_left(lrk_acti1)
 
-        attn_output = residual_acti1+lrk_acti1
+        attn_output = residual_acti1 + lrk_acti1
     else:
         attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
 
@@ -170,6 +166,7 @@ def multi_head_attention_forward(query,                           # type: Tensor
         return attn_output, attn_output_weights.sum(dim=1) / num_heads
     else:
         return attn_output, None
+
 
 class MultiheadAttention(nn.Module):
     """MultiHeadAttention
@@ -182,19 +179,15 @@ class MultiheadAttention(nn.Module):
 
         self.num_heads = num_heads
         self.dropout = dropout
-        
+
         self.head_dim = embed_dim // num_heads
         self.attn_embed_dim = embed_dim
 
-        
         self.in_proj_weight = Parameter(torch.Tensor(3 * self.attn_embed_dim, embed_dim))
-
         self.in_proj_left = LrkLinear(args.rank, 3 * self.attn_embed_dim)
         self.in_proj_right = LrkLinear(embed_dim, args.rank)
 
         self.args = args
-        
-        
 
         if bias:
             self.in_proj_bias = Parameter(torch.Tensor(3 * self.attn_embed_dim))
@@ -203,7 +196,7 @@ class MultiheadAttention(nn.Module):
 
         self.out_proj = nn.Linear(self.attn_embed_dim, embed_dim, bias=bias)
 
-        self.out_proj_left =  LrkLinear(args.rank, embed_dim)
+        self.out_proj_left = LrkLinear(args.rank, embed_dim)
         self.out_proj_right = LrkLinear(self.attn_embed_dim, args.rank)
 
         if add_bias_kv:
@@ -236,23 +229,22 @@ class MultiheadAttention(nn.Module):
         self.in_proj_right.weight.data = in_right
         self.in_proj_weight.data = in_residual
 
-
         self.out_proj_left.weight.data = out_left
         self.out_proj_right.weight.data = out_right
         self.out_proj.weight.data = out_residual
 
     def use_batch_grad(self, scale=None):
-        if(self.in_proj_left.weight.grad == None):
+        # lxuechen: scale is the clipping coefficient.
+        if self.in_proj_left.weight.grad is None:
             self.in_proj_left.weight.grad = process_batch_grad(self.in_proj_left.weight.batch_grad, scale=scale)
             self.in_proj_right.weight.grad = process_batch_grad(self.in_proj_right.weight.batch_grad, scale=scale)
             self.out_proj_left.weight.grad = process_batch_grad(self.out_proj_left.weight.batch_grad, scale=scale)
             self.out_proj_right.weight.grad = process_batch_grad(self.out_proj_right.weight.batch_grad, scale=scale)
-
         else:
             self.in_proj_left.weight.grad += process_batch_grad(self.in_proj_left.weight.batch_grad, scale=scale)
             self.in_proj_right.weight.grad += process_batch_grad(self.in_proj_right.weight.batch_grad, scale=scale)
             self.out_proj_left.weight.grad += process_batch_grad(self.out_proj_left.weight.batch_grad, scale=scale)
-            self.out_proj_right.weight.grad += process_batch_grad(self.out_proj_right.weight.batch_grad, scale=scale)            
+            self.out_proj_right.weight.grad += process_batch_grad(self.out_proj_right.weight.batch_grad, scale=scale)
 
     def _assign_full_grad(self, left, right, host):
         left_w, left_g = left.data, left.grad
@@ -264,10 +256,7 @@ class MultiheadAttention(nn.Module):
 
         host.grad = m1 + m2
 
-
     def assign_full_grad(self):
-
-
         self._assign_full_grad(self.in_proj_left.weight, self.in_proj_right.weight, self.in_proj_weight)
         self._assign_full_grad(self.out_proj_left.weight, self.out_proj_right.weight, self.out_proj.weight)
 
@@ -303,12 +292,12 @@ class MultiheadAttention(nn.Module):
                 attention from looking forward in time (default: None).
         """
         # rel_pos_bias = None
-        return multi_head_attention_forward(query, key, value, 
+        return multi_head_attention_forward(query, key, value,
                                             attn_embed_dim=self.attn_embed_dim,
                                             num_heads=self.num_heads,
                                             in_proj_weight=self.in_proj_weight,
-                                            in_proj_bias=self.in_proj_bias, 
-                                            bias_k=self.bias_k, 
+                                            in_proj_bias=self.in_proj_bias,
+                                            bias_k=self.bias_k,
                                             bias_v=self.bias_v,
                                             ma_module=self,
                                             add_zero_attn=self.add_zero_attn,
