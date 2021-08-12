@@ -14,13 +14,11 @@ import math
 import os
 import sys
 
-import torch
-
 from fairseq import checkpoint_utils, distributed_utils, models, optim, utils
+from fairseq.lrk_utils import process_batch_grad
 from fairseq.meters import AverageMeter, StopwatchMeter, TimeMeter
 from fairseq.optim import lr_scheduler
-
-from fairseq.lrk_utils import process_batch_grad
+import torch
 
 
 class Trainer(object):
@@ -72,16 +70,16 @@ class Trainer(object):
         self.meters['train_nll_loss'] = AverageMeter()
         self.meters['valid_loss'] = AverageMeter()
         self.meters['valid_nll_loss'] = AverageMeter()
-        self.meters['wps'] = TimeMeter()       # words per second
-        self.meters['ups'] = TimeMeter()       # updates per second
-        self.meters['wpb'] = AverageMeter()    # words per batch
-        self.meters['bsz'] = AverageMeter()    # sentences per batch
+        self.meters['wps'] = TimeMeter()  # words per second
+        self.meters['ups'] = TimeMeter()  # updates per second
+        self.meters['wpb'] = AverageMeter()  # words per batch
+        self.meters['bsz'] = AverageMeter()  # sentences per batch
         self.meters['gnorm'] = AverageMeter()  # gradient norm
-        self.meters['clip'] = AverageMeter()   # % of updates clipped
-        self.meters['oom'] = AverageMeter()    # out of memory
+        self.meters['clip'] = AverageMeter()  # % of updates clipped
+        self.meters['oom'] = AverageMeter()  # out of memory
         if args.fp16:
             self.meters['loss_scale'] = AverageMeter()  # dynamic loss scale
-        self.meters['wall'] = TimeMeter()      # wall time in seconds
+        self.meters['wall'] = TimeMeter()  # wall time in seconds
         self.meters['train_wall'] = StopwatchMeter()  # train wall time in seconds
 
     @property
@@ -122,21 +120,27 @@ class Trainer(object):
             self._build_optimizer()  # this will initialize self._lr_scheduler
         return self._lr_scheduler
 
+    # TODO: I need to understand this!
     def _build_optimizer(self):
         params = []
         lrk_params_flags = []
-        if(self.args.sigma > 0):
+        if (self.args.sigma > 0):
             for i, p in enumerate(self.model.parameters()):
                 # Do not compute the conventional gradients because we will manually compute the indiviudal gradients. 
-                if(i>0):
+                if (i > 0):
                     p.requires_grad = False
 
+                # TODO(lxuechen): This is extremely weird!
+                if i == 0:
+                    print('i==0')
+                    print(p.size())
 
             # Collect all parameters that will be useful.
-            # We will use the individual gradients of those parameters with 'lrk_params_flag=True' to update those parameters with 'lrk_params_flag=False'.
+            # We will use the individual gradients of those parameters with 'lrk_params_flag=True' to update those
+            # parameters with 'lrk_params_flag=False'.
             for m in self.model.modules():
-                if(hasattr(m, 'assign_full_grad')):
-                    if(hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+                if (hasattr(m, 'assign_full_grad')):
+                    if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
                         params.append(m.in_proj_weight)
                         params.append(m.in_proj_left.weight)
                         params.append(m.in_proj_right.weight)
@@ -144,7 +148,7 @@ class Trainer(object):
                         params.append(m.out_proj_left.weight)
                         params.append(m.out_proj_right.weight)
                         lrk_params_flags += [False, True, True, False, True, True]
-                    if(hasattr(m, 'fc1') and not self.args.linear_eval):
+                    if (hasattr(m, 'fc1') and not self.args.linear_eval):
                         params.append(m.fc1.weight)
                         params.append(m.fc1_left.weight)
                         params.append(m.fc1_right.weight)
@@ -155,23 +159,26 @@ class Trainer(object):
 
             # Do not reparametrize the classification layer as it is already low-rank
             for p in self.model.named_parameters():
-                if('sentence_classification_head' in p[0]):
-                    print('adding %s to params list'%p[0])
-                    params.append(p[1]) 
-                    lrk_params_flags.append(True)
-        elif(not self.args.linear_eval): # Training without noise
-            for p in self.model.named_parameters():
-                if(p[1].requires_grad and 'left' not in p[0] and 'right' not in p[0]):
+                if ('sentence_classification_head' in p[0]):
+                    print('adding %s to params list' % p[0])
                     params.append(p[1])
-            lrk_params_flags = [False]*len(params)
-        else: # Only train the classification layer
+                    lrk_params_flags.append(True)
+
+        elif (not self.args.linear_eval):  # Training without noise
             for p in self.model.named_parameters():
-                if('sentence_classification_head' in p[0]):
-                    print('adding %s to params list'%p[0])
+                if (p[1].requires_grad and 'left' not in p[0] and 'right' not in p[0]):
+                    params.append(p[1])
+            lrk_params_flags = [False] * len(params)
+        else:  # Only train the classification layer
+            for p in self.model.named_parameters():
+                if ('sentence_classification_head' in p[0]):
+                    print('adding %s to params list' % p[0])
                     params.append(p[1])
                     lrk_params_flags.append(False)
+
         self.params = params
         self.lrk_params_flags = lrk_params_flags
+
         if self.args.fp16:
             try:
                 from apex.normalization import FusedLayerNorm
@@ -191,7 +198,6 @@ class Trainer(object):
 
         if self.args.use_bmuf:
             self._optimizer = optim.FairseqBMUF(self.args, self._optimizer)
-
 
         self._lr_scheduler = lr_scheduler.build_lr_scheduler(self.args, self.optimizer)
         self._lr_scheduler.step_update(0)
@@ -313,18 +319,24 @@ class Trainer(object):
         self.criterion.train()
         self.zero_grad()
 
-          
-
+        # `TransformerSentenceEncoderLayer` and `MultiheadAttention`.
         for m in self.model.modules():
-            # The 'is_training' attribute helps the moudle decide wheter to decompose the weight matrix during the forward process
-            if(self.args.sigma > 0):
-                if(hasattr(m, 'assign_full_grad')):
-                    if(hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+            # The 'is_training' attribute helps the moudle decide wheter to decompose the weight matrix during the
+            # forward process
+            if (self.args.sigma > 0):
+                if (hasattr(m, 'assign_full_grad')):
+                    if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
                         m.is_training = True
-                    if(hasattr(m, 'fc1') and not self.args.linear_eval):
+                    if (hasattr(m, 'fc1') and not self.args.linear_eval):
                         m.is_training = True
             else:
                 m.is_training = False
+
+        # TODO(lxuechen): This seems awkward... is the embedding layer updated as usual?
+        print('| actual params that need grads')
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                print(f"{name} needs grad")
 
         if not dummy_batch:
             self.meters['train_wall'].start()
@@ -332,7 +344,6 @@ class Trainer(object):
         # forward and backward pass
         logging_outputs, sample_sizes, ooms = [], [], 0
         for i, sample in enumerate(samples):
-            
             sample = self._prepare_sample(sample)
             if sample is None:
                 # when sample is None, run forward/backward on a dummy batch
@@ -359,33 +370,34 @@ class Trainer(object):
 
             try:
                 with maybe_no_sync():
+                    # TODO: lxuechen: What happens here?
                     # forward and backward
                     loss, sample_size, logging_output = self.task.train_step(
                         sample, self.model, self.criterion, self.optimizer,
                         ignore_grad
                     )
 
-                    if(self.args.sigma > 0):
+                    if (self.args.sigma > 0):
                         # compute the norms of individual gradients
                         norms = torch.zeros(sample_size, dtype=torch.float, device='cuda')
                         for i, p in enumerate(self.params):
-                            if(self.lrk_params_flags[i]):
+                            if (self.lrk_params_flags[i]):
                                 flat_g = p.batch_grad.view(sample_size, -1)
-                                norms += (torch.norm(flat_g, dim=1)).float()**2
+                                norms += (torch.norm(flat_g, dim=1)).float() ** 2
                         norms = torch.sqrt(norms).half()
                         scale = self.args.clip / norms
-                        scale[scale>1] = 1
+                        scale[scale > 1] = 1
                         for m in self.model.modules():
-                            if(hasattr(m, 'assign_full_grad')):
-                                if(hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+                            if (hasattr(m, 'assign_full_grad')):
+                                if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
                                     m.use_batch_grad(scale)
-                                if(hasattr(m, 'fc1') and not self.args.linear_eval):
+                                if (hasattr(m, 'fc1') and not self.args.linear_eval):
                                     m.use_batch_grad(scale)
 
                         classify_weight = self.params[-2]
                         classify_bias = self.params[-1]
-        
-                        if(classify_weight.grad == None):
+
+                        if (classify_weight.grad == None):
                             classify_weight.grad = process_batch_grad(classify_weight.batch_grad, scale=scale)
                             classify_bias.grad = process_batch_grad(classify_bias.batch_grad, scale=scale)
                         else:
@@ -430,35 +442,31 @@ class Trainer(object):
             if self.fast_stat_sync:
                 self._all_reduce_list[5] += ooms
 
-
-
-        
         update_freq = self.args.update_freq[0]
-        batch_size = self.args.max_sentences*update_freq
+        batch_size = self.args.max_sentences * update_freq
 
-            
         # After multiple updates, we now have the clipped and accmulated individual gradients.
-        if(self.args.sigma > 0):
+        if (self.args.sigma > 0):
             for i, p in enumerate(self.params):
                 # Add noise to averaged individual gradients
-                if(self.lrk_params_flags[i]):
+                if (self.lrk_params_flags[i]):
                     p.grad /= batch_size
                     sigma = self.args.sigma * self.args.clip
-                    p.grad += torch.normal(0, sigma/batch_size, size=p.grad.shape).cuda().half()
+                    p.grad += torch.normal(0, sigma / batch_size, size=p.grad.shape).cuda().half()
                 # We do not use the gradient on full weights
                 else:
                     p.grad = None
 
             # Assign reconstructed noisy gradients to parameters
             for m in self.model.modules():
-                if(hasattr(m, 'assign_full_grad')):
-                    if(hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+                if (hasattr(m, 'assign_full_grad')):
+                    if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
                         m.restore_param()
                         m.assign_full_grad()
-                    if(hasattr(m, 'fc1') and not self.args.linear_eval):
+                    if (hasattr(m, 'fc1') and not self.args.linear_eval):
                         m.restore_param()
                         m.assign_full_grad()
-        
+
         if ooms > 0 and self._oom_batch is not None:
             self.handle_ooms(ooms)
 
@@ -515,33 +523,34 @@ class Trainer(object):
             logging_output = self.task.aggregate_logging_outputs(
                 logging_outputs, self.get_criterion()
             )
-            #logging_output = logging_outputs[0]
+            # logging_output = logging_outputs[0]
             sample_size = self.task.grad_denom(sample_sizes, self.get_criterion())
 
         if not all(k in logging_output for k in ['ntokens', 'nsentences']):
             raise Exception((
-                'Please update the {}.aggregate_logging_outputs() method to '
-                'return ntokens and nsentences'
-            ).format(self.task.__class__.__name__))
+                                'Please update the {}.aggregate_logging_outputs() method to '
+                                'return ntokens and nsentences'
+                            ).format(self.task.__class__.__name__))
 
         try:
-            
-            if(self.args.sigma <= 0):
+
+            if (self.args.sigma <= 0):
                 # normalize grads by sample size
                 if sample_size > 0:
                     self.optimizer.multiply_grads(self.args.distributed_world_size / float(sample_size))
             skip = False
-            if('MNLI' in self.args.data or 'QQP' in self.args.data or 'QNLI' in self.args.data or 'SST-2' in self.args.data):
-                bs = self.args.max_sentences*self.args.update_freq[0]
-                if(sample_size % bs != 0 and sample_size % bs < 0.95*bs and self.args.sigma >0):
+            if (
+                'MNLI' in self.args.data or 'QQP' in self.args.data or 'QNLI' in self.args.data or 'SST-2' in
+                self.args.data):
+                bs = self.args.max_sentences * self.args.update_freq[0]
+                if (sample_size % bs != 0 and sample_size % bs < 0.95 * bs and self.args.sigma > 0):
                     print('\nskipping batch with size: ', sample_size, '\n')
                     skip = True
-            
+
             grad_norm = self.optimizer.clip_grad_norm(self.args.clip_norm)
             self._prev_grad_norm = grad_norm
 
-
-            if(not skip):        
+            if (not skip):
                 # take an optimization step
                 self.optimizer.step()
                 self.set_num_updates(self.get_num_updates() + 1)
@@ -570,10 +579,10 @@ class Trainer(object):
 
             # clear CUDA cache to reduce memory fragmentation
             if (self.args.empty_cache_freq > 0 and
-                    ((self.get_num_updates() + self.args.empty_cache_freq - 1) %
-                     self.args.empty_cache_freq) == 0 and
-                    torch.cuda.is_available() and
-                    not self.args.cpu):
+                ((self.get_num_updates() + self.args.empty_cache_freq - 1) %
+                 self.args.empty_cache_freq) == 0 and
+                torch.cuda.is_available() and
+                not self.args.cpu):
                 torch.cuda.empty_cache()
         except OverflowError as e:
             print('| WARNING: overflow detected, ' + str(e))
@@ -586,8 +595,7 @@ class Trainer(object):
 
         self.clear_buffered_stats()
         self.meters['train_wall'].stop()
-        #print('end of training step')
-        #exit()
+
         return logging_output
 
     def valid_step(self, sample, raise_oom=False):
@@ -597,9 +605,8 @@ class Trainer(object):
             self.criterion.eval()
 
             for m in self.model.modules():
-                if(hasattr(m, 'is_training')):
+                if (hasattr(m, 'is_training')):
                     m.is_training = False
-                    #m.restore_param()
 
             sample = self._prepare_sample(sample)
             if sample is None:
@@ -638,8 +645,8 @@ class Trainer(object):
             logging_output = [logging_output]
             sample_size = [sample_size]
 
-        #logging_output = logging_output[0]
-        #aggregate logging outputs and sample sizes
+        # logging_output = logging_output[0]
+        # aggregate logging outputs and sample sizes
         logging_output = self.task.aggregate_logging_outputs(
             logging_output, self.get_criterion()
         )
@@ -656,8 +663,7 @@ class Trainer(object):
 
         if 'nll_loss' in logging_output:
             self.meters['valid_nll_loss'].update(logging_output.get('nll_loss', 0), ntokens)
-        #print('end of valid step')
-        #exit()
+
         return logging_output
 
     def dummy_train_step(self, dummy_batch):
@@ -756,4 +762,3 @@ class Trainer(object):
                 )
             )
         )
-
