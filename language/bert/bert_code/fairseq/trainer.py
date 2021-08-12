@@ -453,6 +453,7 @@ class Trainer(object):
         update_freq = self.args.update_freq[0]
         batch_size = self.args.max_sentences * update_freq
         print(f'batch size: {batch_size}, update_freq: {update_freq}')
+        sys.stdout.flush()
 
         # After multiple updates, we now have the clipped and accmulated individual gradients.
         if self.args.sigma > 0:

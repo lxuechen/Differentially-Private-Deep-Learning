@@ -247,6 +247,7 @@ class MultiheadAttention(nn.Module):
             self.out_proj_right.weight.grad += process_batch_grad(self.out_proj_right.weight.batch_grad, scale=scale)
 
     def _assign_full_grad(self, left, right, host):
+        # TODO(lxuechen): This could be moved to `utils`.
         left_w, left_g = left.data, left.grad
         right_w, right_g = right.data, right.grad
 

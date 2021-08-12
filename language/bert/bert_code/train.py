@@ -8,6 +8,7 @@ Train a new model on one or across multiple GPUs.
 """
 
 import collections
+import json
 import math
 import random
 
@@ -39,6 +40,7 @@ def main(args, init_distributed=False):
 
     # Print args
     print(args)
+    print(json.dumps(args.__dict__, indent=4))
 
     # Setup task, e.g., translation, language modeling, etc.
     task = tasks.setup_task(args)
@@ -130,7 +132,6 @@ def train(args, trainer, task, epoch_itr):
     progress = progress_bar.build_progress_bar(
         args, itr, epoch_itr.epoch, no_progress_bar='simple',
     )
-    # print('update_freq: ', update_freq)
     extra_meters = collections.defaultdict(lambda: AverageMeter())
     valid_subsets = args.valid_subset.split(',')
     max_update = args.max_update or math.inf
@@ -141,7 +142,6 @@ def train(args, trainer, task, epoch_itr):
     epoch_loss_list = []
     import tqdm
     for i, samples in tqdm.tqdm(enumerate(progress, start=epoch_itr.iterations_in_epoch)):
-        # print(len(samples))
         log_output = trainer.train_step(samples)
         if log_output is None:
             continue

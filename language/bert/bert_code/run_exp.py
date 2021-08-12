@@ -82,6 +82,8 @@ sess = args.sess
 
 os.system('mkdir -p %s/%s'%(args.output_dir, args.task))
 #--warmup-ratio %f
+
+# lxuechen: `update-freq` and `max-sentences` determines the batch size.
 cmd = 'CUDA_VISIBLE_DEVICES=%d python train.py %s --fp16  --fp16-init-scale 4 --threshold-loss-scale 1 --fp16-scale-window 128 \
         --restore-file %s \
         --max-positions 512 --clip %f --sigma %f \
