@@ -103,6 +103,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.need_decompose = True
 
     def _assign_full_grad(self, left, right, host):
+        # (dL R + L dR) + L Lt dL R
         left_w, left_g = left.data, left.grad
         right_w, right_g = right.data, right.grad
 
