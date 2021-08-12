@@ -16,8 +16,8 @@ import torch
 
 from fairseq import checkpoint_utils, distributed_utils, options, progress_bar, tasks, utils
 from fairseq.data import iterators
-from fairseq.trainer import Trainer
 from fairseq.meters import AverageMeter, StopwatchMeter
+from fairseq.trainer import Trainer
 
 
 def main(args, init_distributed=False):
@@ -57,6 +57,12 @@ def main(args, init_distributed=False):
         sum(p.numel() for p in model.parameters() if p.requires_grad),
     ))
 
+    # Check all the trainable params.
+    print('| listing trainable params: ')
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name)
+
     # Build trainer
     trainer = Trainer(args, task, model, criterion)
     print('| training on {} GPUs'.format(args.distributed_world_size))
@@ -73,11 +79,13 @@ def main(args, init_distributed=False):
         mean = para_var.mean().item()
         std = para_var.std().item()
         print("mean:{:10.3e},  std:{:10.3e},  Norm:{:8.3f} <- {}".format(mean, std, v_norm, para_name))
+
     # Train until the learning rate gets too small
     max_epoch = args.max_epoch or math.inf
     max_update = args.max_update or math.inf
     if args.max_epoch > 0:
-        num_iter_per_epoch = (len(epoch_itr) + args.distributed_world_size - 1) // args.distributed_world_size #from vm
+        num_iter_per_epoch = (len(
+            epoch_itr) + args.distributed_world_size - 1) // args.distributed_world_size  # from vm
         trainer.lr_reinit(num_iter_per_epoch * max_epoch // args.update_freq[0], trainer.get_num_updates())
     lr = trainer.get_lr()
     train_meter = StopwatchMeter()
@@ -121,17 +129,18 @@ def train(args, trainer, task, epoch_itr):
     progress = progress_bar.build_progress_bar(
         args, itr, epoch_itr.epoch, no_progress_bar='simple',
     )
-    #print('update_freq: ', update_freq) 
+    # print('update_freq: ', update_freq)
     extra_meters = collections.defaultdict(lambda: AverageMeter())
     valid_subsets = args.valid_subset.split(',')
     max_update = args.max_update or math.inf
-    num_iter_per_epoch = (len(epoch_itr) + args.distributed_world_size - 1) // args.distributed_world_size# // args.update_freq
+    num_iter_per_epoch = (len(
+        epoch_itr) + args.distributed_world_size - 1) // args.distributed_world_size  # // args.update_freq
     valid_freq = (num_iter_per_epoch + 1) // args.validate_interval_updates if args.validate_interval_updates > 1 else 0
-    
+
     epoch_loss_list = []
     import tqdm
     for i, samples in tqdm.tqdm(enumerate(progress, start=epoch_itr.iterations_in_epoch)):
-        #print(len(samples))
+        # print(len(samples))
         log_output = trainer.train_step(samples)
         if log_output is None:
             continue
@@ -157,7 +166,7 @@ def train(args, trainer, task, epoch_itr):
         num_updates = trainer.get_num_updates()
 
         need_valid = not args.disable_validation and valid_freq > 0 and i > 0 and i % valid_freq == 0
-        if i == num_iter_per_epoch - 1: 
+        if i == num_iter_per_epoch - 1:
             need_valid = False
         need_save = not args.disable_validation \
                     and args.save_interval_updates > 0 \
@@ -172,8 +181,8 @@ def train(args, trainer, task, epoch_itr):
             break
 
     epoch_loss_list = np.array(epoch_loss_list)
-    #print('epoch loss list shape', epoch_loss_list.shape)
-    #np.save('loss_stats/%s_train_loss.npy'%args.sess, epoch_loss_list)
+    # print('epoch loss list shape', epoch_loss_list.shape)
+    # np.save('loss_stats/%s_train_loss.npy'%args.sess, epoch_loss_list)
 
     # log end-of-epoch stats
     stats = get_training_stats(trainer)
@@ -224,7 +233,6 @@ def validate(args, trainer, task, epoch_itr, subsets):
 
     valid_losses = []
 
-
     for i, subset in enumerate(subsets):
         # Initialize data iterator
         itr = task.get_batch_iterator(
@@ -250,7 +258,6 @@ def validate(args, trainer, task, epoch_itr, subsets):
 
         epoch_loss_list = []
 
-
         # reset validation loss meters
         for k in ['valid_loss', 'valid_nll_loss']:
             meter = trainer.get_meter(k)
@@ -267,7 +274,7 @@ def validate(args, trainer, task, epoch_itr, subsets):
                 extra_meters[k].update(v)
 
         epoch_loss_list = np.array(epoch_loss_list)
-        #np.save('loss_stats/%s_valid%d_loss.npy'%(args.sess, i), epoch_loss_list)
+        # np.save('loss_stats/%s_valid%d_loss.npy'%(args.sess, i), epoch_loss_list)
 
         # log validation stats
         stats = get_valid_stats(trainer, args, extra_meters)
@@ -350,7 +357,7 @@ def cli_main():
             print('| NOTE: you may get better performance with: --ddp-backend=no_c10d')
         torch.multiprocessing.spawn(
             fn=distributed_main,
-            args=(args, ),
+            args=(args,),
             nprocs=args.distributed_world_size,
         )
     else:
