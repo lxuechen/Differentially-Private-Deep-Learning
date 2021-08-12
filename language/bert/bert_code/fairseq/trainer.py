@@ -345,8 +345,9 @@ class Trainer(object):
             self.meters['train_wall'].start()
 
         # forward and backward pass
+        import tqdm
         logging_outputs, sample_sizes, ooms = [], [], 0
-        for i, sample in enumerate(samples):
+        for i, sample in tqdm.tqdm(enumerate(samples), desc="sample batch"):
             sample = self._prepare_sample(sample)
             if sample is None:
                 # when sample is None, run forward/backward on a dummy batch
