@@ -324,11 +324,11 @@ class Trainer(object):
         for m in self.model.modules():
             # The 'is_training' attribute helps the moudle decide wheter to decompose the weight matrix during the
             # forward process
-            if (self.args.sigma > 0):
-                if (hasattr(m, 'assign_full_grad')):
-                    if (hasattr(m, 'in_proj_weight') and not self.args.linear_eval):
+            if self.args.sigma > 0:
+                if hasattr(m, 'assign_full_grad'):
+                    if hasattr(m, 'in_proj_weight') and not self.args.linear_eval:
                         m.is_training = True
-                    if (hasattr(m, 'fc1') and not self.args.linear_eval):
+                    if hasattr(m, 'fc1') and not self.args.linear_eval:
                         m.is_training = True
             else:
                 m.is_training = False
@@ -449,8 +449,10 @@ class Trainer(object):
             if self.fast_stat_sync:
                 self._all_reduce_list[5] += ooms
 
+        # lxuechen: This is a very weird way to get the batch size correct.
         update_freq = self.args.update_freq[0]
         batch_size = self.args.max_sentences * update_freq
+        print(f'batch size: {batch_size}, update_freq: {update_freq}')
 
         # After multiple updates, we now have the clipped and accmulated individual gradients.
         if self.args.sigma > 0:
