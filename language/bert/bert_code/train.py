@@ -74,8 +74,16 @@ def main(args, init_distributed=False):
         args.max_sentences,
     ))
 
+    print(' | before loading checkpoint')
+    for para_name, para_var in model.named_parameters():
+        v_norm = para_var.norm(2).item()
+        mean = para_var.mean().item()
+        std = para_var.std().item()
+        print("mean:{:10.3e},  std:{:10.3e},  Norm:{:8.3f} <- {}".format(mean, std, v_norm, para_name))
+
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
+    print(' | after loading checkpoint')
     extra_state, epoch_itr = checkpoint_utils.load_checkpoint(args, trainer)
     for para_name, para_var in model.named_parameters():
         v_norm = para_var.norm(2).item()
@@ -140,6 +148,22 @@ def train(args, trainer, task, epoch_itr):
     valid_freq = (num_iter_per_epoch + 1) // args.validate_interval_updates if args.validate_interval_updates > 1 else 0
 
     epoch_loss_list = []
+
+    # Check the max length.
+    import sys
+    one_epoch_progress = progress_bar.build_progress_bar(
+        args, itr, 2, no_progress_bar='simple',
+    )
+    max_len = -sys.maxsize
+    for samples in one_epoch_progress:
+        for sample in samples:
+            this_len = sample['net_input']['src_tokens'].size(1)
+            if this_len > max_len:
+                max_len = this_len
+    print(f" | max len of training data: {max_len}")
+    import time;
+    time.sleep(3)
+
     import tqdm
     for i, samples in tqdm.tqdm(enumerate(progress, start=epoch_itr.iterations_in_epoch)):
         log_output = trainer.train_step(samples)
