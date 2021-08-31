@@ -333,7 +333,6 @@ class Trainer(object):
             else:
                 m.is_training = False
 
-        # TODO(lxuechen): This seems awkward... is the embedding layer updated as usual?
         # Only the embedding layer requires grad; the embedding layer is `Embedding(32769, 768, padding_idx=1)`
         # The embedding index is also awkward.
         print('| actual params that need grads')
@@ -345,9 +344,8 @@ class Trainer(object):
             self.meters['train_wall'].start()
 
         # forward and backward pass
-        import tqdm
         logging_outputs, sample_sizes, ooms = [], [], 0
-        for i, sample in tqdm.tqdm(enumerate(samples), desc="sample batch"):
+        for i, sample in enumerate(samples):
             sample = self._prepare_sample(sample)
             if sample is None:
                 # when sample is None, run forward/backward on a dummy batch
