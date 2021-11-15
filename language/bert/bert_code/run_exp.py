@@ -81,7 +81,7 @@ if(args.to_console):
 sess = args.sess
 
 os.system('mkdir -p %s/%s'%(args.output_dir, args.task))
-#--warmup-ratio %f
+
 
 # lxuechen: `update-freq` and `max-sentences` determines the batch size.
 cmd = 'CUDA_VISIBLE_DEVICES=%d python train.py %s --fp16  --fp16-init-scale 4 --threshold-loss-scale 1 --fp16-scale-window 128 \
@@ -105,5 +105,26 @@ cmd = 'CUDA_VISIBLE_DEVICES=%d python train.py %s --fp16  --fp16-init-scale 4 --
         --tensorboard-logdir . --bert-pooler --pooler-dropout %f \
         --best-checkpoint-metric %s --maximize-best-checkpoint-metric %s %s/%s/%s_train_log.txt'%(args.gpu_id, args.data_dir, args.ckpt_dir, args.clip, sigma, args.max_sentences, update_freq, args.rank, apdx, n_classes, args.dropout, args.dropout, args.weight_decay, args.lr, args.warmup_ratio, sess, args.epoch, args.seed, args.output_dir, args.dropout, metric, output_cmd, args.output_dir, args.task, sess)
 
+# lxuechen: Full-precision fails.
+# cmd = 'CUDA_VISIBLE_DEVICES=%d python train.py %s \
+#         --restore-file %s \
+#         --max-positions 512 --clip %f --sigma %f \
+#         --max-sentences %d --update-freq %d \
+#         --rank %d --max-tokens 8000 \
+#         --task sentence_prediction \
+#         --reset-optimizer --reset-dataloader --reset-meters \
+#         --required-batch-size-multiple 1 \
+#         --init-token 0 --separator-token 2 \
+#         --arch roberta_base \
+#         --criterion sentence_prediction %s \
+#         --num-classes %d \
+#         --dropout %f --attention-dropout %f \
+#         --weight-decay %f --optimizer adam --adam-betas "(0.9,0.999)" --adam-eps 1e-06 \
+#         --clip-norm 0 --validate-interval-updates 1 \
+#         --lr-scheduler polynomial_decay --lr %f --warmup-ratio %f --sess %s \
+#         --max-epoch %d --seed %d --save-dir %s --no-progress-bar --log-interval 100 --no-epoch-checkpoints --no-last-checkpoints --no-best-checkpoints \
+#         --find-unused-parameters --skip-invalid-size-inputs-valid-test --truncate-sequence --embedding-normalize  \
+#         --tensorboard-logdir . --bert-pooler --pooler-dropout %f \
+#         --best-checkpoint-metric %s --maximize-best-checkpoint-metric %s %s/%s/%s_train_log.txt'%(args.gpu_id, args.data_dir, args.ckpt_dir, args.clip, sigma, args.max_sentences, update_freq, args.rank, apdx, n_classes, args.dropout, args.dropout, args.weight_decay, args.lr, args.warmup_ratio, sess, args.epoch, args.seed, args.output_dir, args.dropout, metric, output_cmd, args.output_dir, args.task, sess)
 
 os.system(cmd)
