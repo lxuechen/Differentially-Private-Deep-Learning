@@ -84,6 +84,8 @@ os.system('mkdir -p %s/%s'%(args.output_dir, args.task))
 
 
 # lxuechen: `update-freq` and `max-sentences` determines the batch size.
+# Download the official roberta checkpoints and run:
+# python run_exp.py --ckpt_dir /nlp/scr/lxuechen/rgp-ckpts/roberta.base/model.pt --batch_size 1000 --epoch 50 --gpu_id 0 --seed 0  --lr 3e-4 --eps 8 --delta 1e-5 --clip 10 --rank 1 --epoch 50 --sess debug_sst2 --to_console
 cmd = 'CUDA_VISIBLE_DEVICES=%d python train.py %s --fp16  --fp16-init-scale 4 --threshold-loss-scale 1 --fp16-scale-window 128 \
         --restore-file %s \
         --max-positions 512 --clip %f --sigma %f \
